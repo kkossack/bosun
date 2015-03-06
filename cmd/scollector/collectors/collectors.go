@@ -69,8 +69,10 @@ var (
 	tlock     sync.Mutex
 	AddTags   opentsdb.TagSet
 
-	AddProcessDotNetConfig = func(line string) error { return fmt.Errorf("process_dotnet watching not implemented on this platform") }
-	WatchProcessesDotNet   = func() {}
+	AddProcessDotNetConfig = func(line string) error {
+		return fmt.Errorf("process_dotnet watching not implemented on this platform")
+	}
+	WatchProcessesDotNet = func() {}
 )
 
 var (

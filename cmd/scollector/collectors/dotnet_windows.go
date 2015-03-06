@@ -3,7 +3,6 @@ package collectors
 import (
 	"regexp"
 	"strings"
-	"time"
 
 	"bosun.org/metadata"
 	"bosun.org/opentsdb"
@@ -20,17 +19,17 @@ func init() {
 		regexesDotNet = append(regexesDotNet, reg)
 		return nil
 	}
-
 	WatchProcessesDotNet = func() {
 		if len(regexesDotNet) == 0 {
 			// if no processesDotNet configured in config file, use this set instead.
 			regexesDotNet = append(regexesDotNet, regexp.MustCompile("^w3wp"))
 		}
 		c := &IntervalCollector{
-			F:        c_dotnet_loading,
-			Interval: time.Second * 60,
+			F: c_dotnet_loading,
 		}
-		c.init = wmiInit(c, func() interface{} { return &[]Win32_PerfRawData_NETFramework_NETCLRLoading{} }, ``, &dotnetLoadingQuery)
+		c.init = wmiInit(c, func() interface{} {
+			return &[]Win32_PerfRawData_NETFramework_NETCLRLoading{}
+		}, "", &dotnetLoadingQuery)
 		collectors = append(collectors, c)
 	}
 }
@@ -50,7 +49,6 @@ func c_dotnet_loading() (opentsdb.MultiDataPoint, error) {
 		if !nameMatches(v.Name, regexesDotNet) {
 			continue
 		}
-
 		id := "0"
 		raw_name := strings.Split(v.Name, "#")
 		name := raw_name[0]
@@ -61,7 +59,6 @@ func c_dotnet_loading() (opentsdb.MultiDataPoint, error) {
 		if len(raw_name) > 2 {
 			continue
 		}
-
 		tags := opentsdb.TagSet{"name": name, "id": id}
 		Add(&md, "dotnet.current.appdomains", v.Currentappdomains, tags, metadata.Gauge, metadata.Count, descWinDotNetLoadingCurrentappdomains)
 		Add(&md, "dotnet.current.assemblies", v.CurrentAssemblies, tags, metadata.Gauge, metadata.Count, descWinDotNetLoadingCurrentAssemblies)
