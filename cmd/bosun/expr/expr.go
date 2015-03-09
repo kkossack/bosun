@@ -38,6 +38,14 @@ type State struct {
 	// LogstashElastic
 	logstashQueries      []elastic.SearchService
 	logstashElasticHosts []string
+
+	History AlertStatusProvider
+}
+
+// Alert Status Provider is used to provide information about alert results.
+// This facilitates alerts referencing other alerts, even when they go unknown or unevaluated.
+type AlertStatusProvider interface {
+	GetUnknownAndUnevaluatedAlertKeys(alertName string) (unknown, unevaluated []AlertKey)
 }
 
 var ErrUnknownOp = fmt.Errorf("expr: unknown op type")

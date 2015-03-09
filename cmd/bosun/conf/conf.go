@@ -1268,37 +1268,11 @@ func (c *Conf) Funcs() map[string]eparse.Func {
 		}
 		return t, nil
 	}
-	getAlertExpr := func(name, key string) (*Alert, *expr.Expr, error) {
-		a := c.Alerts[name]
-		if a == nil {
-			return nil, nil, fmt.Errorf("bad alert name %v", name)
-		}
-		var e *expr.Expr
-		switch key {
-		case "crit":
-			e = a.Crit
-		case "warn":
-			e = a.Warn
-		default:
-			return nil, nil, fmt.Errorf("alert: unsupported key %v", key)
-		}
-		if e == nil {
-			return nil, nil, fmt.Errorf("alert: nil expression")
-		}
-		return a, e, nil
-	}
-	alert := func(s *expr.State, T miniprofiler.Timer, name, key string) (results *expr.Results, err error) {
-		_, e, err := getAlertExpr(name, key)
-		if err != nil {
-			return nil, err
-		}
-		results, _, err = e.ExecuteState(s, T)
-		return
-	}
+
 	tagAlert := func(args []eparse.Node) (eparse.Tags, error) {
 		name := args[0].(*eparse.StringNode).Text
 		key := args[1].(*eparse.StringNode).Text
-		a, e, err := getAlertExpr(name, key)
+		a, e, err := c.getAlertExpr(name, key)
 		if err != nil {
 			return nil, err
 		}
@@ -1307,12 +1281,13 @@ func (c *Conf) Funcs() map[string]eparse.Func {
 		}
 		return e.Root.Tags()
 	}
+
 	funcs := map[string]eparse.Func{
 		"alert": {
 			Args:   []eparse.FuncType{eparse.TypeString, eparse.TypeString},
 			Return: eparse.TypeNumber,
 			Tags:   tagAlert,
-			F:      alert,
+			F:      c.alert,
 		},
 		"lookup": {
 			Args:   []eparse.FuncType{eparse.TypeString, eparse.TypeString},
@@ -1342,4 +1317,66 @@ func (c *Conf) Funcs() map[string]eparse.Func {
 		merge(expr.LogstashElastic)
 	}
 	return funcs
+}
+
+func (c *Conf) getAlertExpr(name, key string) (*Alert, *expr.Expr, error) {
+	a := c.Alerts[name]
+	if a == nil {
+		return nil, nil, fmt.Errorf("bad alert name %v", name)
+	}
+	var e *expr.Expr
+	switch key {
+	case "crit":
+		e = a.Crit
+	case "warn":
+		e = a.Warn
+	default:
+		return nil, nil, fmt.Errorf("alert: unsupported key %v", key)
+	}
+	if e == nil {
+		return nil, nil, fmt.Errorf("alert: nil expression")
+	}
+	return a, e, nil
+}
+
+func (c *Conf) alert(s *expr.State, T miniprofiler.Timer, name, key string) (results *expr.Results, err error) {
+	_, e, err := c.getAlertExpr(name, key)
+	if err != nil {
+		return nil, err
+	}
+	results, _, err = e.ExecuteState(s, T)
+
+	if s.History != nil {
+
+		unknownTags, unevalTags := s.History.GetUnknownAndUnevaluatedAlertKeys(name)
+
+		// For currently unknown tags NOT in the result set, add an error result
+		for _, ak := range unknownTags {
+			found := false
+			for _, result := range results.Results {
+				if result.Group.Equal(ak.Group()) {
+					found = true
+					break
+				}
+			}
+			if found {
+				res := expr.Result{
+					Value: expr.Number(1),
+					Group: ak.Group(),
+				}
+				results.Results = append(results.Results, &res)
+			}
+		}
+		//For all unevaluated tags in run history, make sure we report a nonzero result.
+	Loop:
+		for _, result := range results.Results {
+			for _, ak := range unevalTags {
+				if result.Group.Equal(ak.Group()) {
+					result.Value = expr.Number(1)
+					break Loop
+				}
+			}
+		}
+	}
+	return results, nil
 }
