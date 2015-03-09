@@ -231,6 +231,7 @@ type Alert struct {
 	Name             string
 	Crit             *expr.Expr `json:",omitempty"`
 	Warn             *expr.Expr `json:",omitempty"`
+	Depends          *expr.Expr `json:",omitempty"`
 	Squelch          Squelches  `json:"-"`
 	CritNotification *Notifications
 	WarnNotification *Notifications
@@ -240,10 +241,8 @@ type Alert struct {
 	UnjoinedOK       bool     `json:",omitempty"`
 	returnType       eparse.FuncType
 
-	crit, warn string
-	template   string
-	squelch    []string
-	tags       eparse.Tags
+	template string
+	squelch  []string
 }
 
 type Notifications struct {
@@ -794,31 +793,11 @@ func (c *Conf) loadAlert(s *parse.SectionNode) {
 			}
 			a.Template = t
 		case "crit":
-			a.crit = v
-			crit, err := c.NewExpr(a.crit)
-			if err != nil {
-				c.error(err)
-			}
-			switch crit.Root.Return() {
-			case eparse.TypeNumber, eparse.TypeScalar:
-				// break
-			default:
-				c.errorf("crit must return a number")
-			}
-			a.Crit = crit
+			a.Crit = c.NewExpr(v)
 		case "warn":
-			a.warn = v
-			warn, err := c.NewExpr(a.warn)
-			if err != nil {
-				c.error(err)
-			}
-			switch warn.Root.Return() {
-			case eparse.TypeNumber, eparse.TypeScalar:
-				// break
-			default:
-				c.errorf("warn must return a number")
-			}
-			a.Warn = warn
+			a.Warn = c.NewExpr(v)
+		case "depends":
+			a.Depends = c.NewExpr(v)
 		case "squelch":
 			a.squelch = append(a.squelch, v)
 			if err := a.Squelch.Add(v); err != nil {
@@ -875,7 +854,15 @@ func (c *Conf) loadAlert(s *parse.SectionNode) {
 			c.errorf("crit tags (%v) and warn tags (%v) must be equal", tags, wtags)
 		}
 	}
-	a.tags = tags
+	if a.Depends != nil {
+		depTags, err := a.Depends.Root.Tags()
+		if err != nil {
+			c.error(err)
+		}
+		if len(depTags.Intersection(tags)) < 1 {
+			c.errorf("Depends and crit/warn must share at least one tag.")
+		}
+	}
 	a.returnType = ret
 	c.Alerts[name] = &a
 }
@@ -1169,8 +1156,18 @@ func (c *Conf) AlertTemplateStrings() (*AlertTemplateStrings, error) {
 	}, nil
 }
 
-func (c *Conf) NewExpr(s string) (*expr.Expr, error) {
-	return expr.New(s, c.Funcs())
+func (c *Conf) NewExpr(s string) *expr.Expr {
+	exp, err := expr.New(s, c.Funcs())
+	if err != nil {
+		c.error(err)
+	}
+	switch exp.Root.Return() {
+	case eparse.TypeNumber, eparse.TypeScalar:
+		break
+	default:
+		c.errorf("expression must return a number")
+	}
+	return exp
 }
 
 func (c *Conf) Funcs() map[string]eparse.Func {
