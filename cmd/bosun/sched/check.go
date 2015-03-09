@@ -74,6 +74,10 @@ func (s *Schedule) RunHistory(r *RunHistory) {
 			s.status[ak] = state
 		}
 		last := state.Append(event)
+		if event.Unevaluated {
+			state.Unevaluated = true
+			continue
+		}
 		a := s.Conf.Alerts[ak.Name()]
 		if event.Status > StNormal {
 			if event.Status != StUnknown {
@@ -217,26 +221,46 @@ func (s *Schedule) findStaleAlerts(now time.Time) []expr.AlertKey {
 func (s *Schedule) CheckAlert(T miniprofiler.Timer, r *RunHistory, a *conf.Alert) {
 	log.Printf("check alert %v start", a.Name)
 	start := time.Now()
-	var warns expr.AlertKeys
-	crits, err := s.CheckExpr(T, r, a, a.Crit, StCritical, nil)
+	var warns, crits expr.AlertKeys
+	d, err := s.executeExpr(T, r, a, a.Depends)
 	if err == nil {
-		warns, _ = s.CheckExpr(T, r, a, a.Warn, StWarning, crits)
+		deps := filterDependencyResults(d)
+		crits, err := s.CheckExpr(T, r, a, a.Crit, StCritical, nil, deps)
+		if err == nil {
+			warns, _ = s.CheckExpr(T, r, a, a.Warn, StWarning, crits, deps)
+		}
 	}
+
 	collect.Put("check.duration", opentsdb.TagSet{"name": a.Name}, time.Since(start).Seconds())
 	log.Printf("check alert %v done (%s): %v crits, %v warns", a.Name, time.Since(start), len(crits), len(warns))
 }
 
-func (s *Schedule) CheckExpr(T miniprofiler.Timer, rh *RunHistory, a *conf.Alert, e *expr.Expr, checkStatus Status, ignore expr.AlertKeys) (alerts expr.AlertKeys, err error) {
-	if e == nil {
-		return
+func filterDependencyResults(results *expr.Results) expr.ResultSlice {
+	// take the results of the dependency expression and filter it to
+	// non-zero tag sets.
+	filtered := expr.ResultSlice{}
+	if results == nil {
+		return filtered
 	}
-	defer func() {
-		if err == nil {
-			return
+	for _, r := range results.Results {
+		var n float64
+		switch v := r.Value.(type) {
+		case expr.Number:
+			n = float64(v)
+		case expr.Scalar:
+			n = float64(v)
 		}
-		collect.Add("check.errs", opentsdb.TagSet{"metric": a.Name}, 1)
-		log.Println(err)
-	}()
+		if !math.IsNaN(n) && n != 0 {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}
+
+func (s *Schedule) executeExpr(T miniprofiler.Timer, rh *RunHistory, a *conf.Alert, e *expr.Expr) (*expr.Results, error) {
+	if e == nil {
+		return nil, nil
+	}
 	results, _, err := e.Execute(rh.Context, rh.GraphiteContext, s.Conf.LogstashElasticHosts, rh.Cache, T, rh.Start, 0, a.UnjoinedOK, s.Search, s.Conf.AlertSquelched(a))
 	if err != nil {
 		ak := expr.NewAlertKey(a.Name, nil)
@@ -255,7 +279,25 @@ func (s *Schedule) CheckExpr(T miniprofiler.Timer, rh *RunHistory, a *conf.Alert
 		rh.Events[ak] = &Event{
 			Status: StError,
 		}
+		return nil, err
+	}
+	return results, err
+}
+
+func (s *Schedule) CheckExpr(T miniprofiler.Timer, rh *RunHistory, a *conf.Alert, e *expr.Expr, checkStatus Status, ignore expr.AlertKeys, deps expr.ResultSlice) (alerts expr.AlertKeys, err error) {
+	if e == nil {
 		return
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		collect.Add("check.errs", opentsdb.TagSet{"metric": a.Name}, 1)
+		log.Println(err)
+	}()
+	results, err := s.executeExpr(T, rh, a, e)
+	if err != nil {
+		return nil, err
 	}
 Loop:
 	for _, r := range results.Results {
@@ -285,6 +327,11 @@ Loop:
 		if event == nil {
 			event = new(Event)
 			rh.Events[ak] = event
+		}
+		for _, dep := range deps {
+			if dep.Group.Overlaps(r.Group) {
+				event.Unevaluated = true
+			}
 		}
 		result := Result{
 			Result: r,

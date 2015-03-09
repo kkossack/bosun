@@ -662,6 +662,7 @@ type State struct {
 	NeedAck     bool
 	Open        bool
 	Forgotten   bool
+	Unevaluated bool
 }
 
 func (s *State) AlertKey() expr.AlertKey {
@@ -787,6 +788,7 @@ type Event struct {
 	Warn, Crit, Error *Result
 	Status            Status
 	Time              time.Time
+	Unevaluated       bool
 }
 
 type Result struct {
