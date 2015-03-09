@@ -61,26 +61,6 @@ func (s *Schedule) NewRunHistory(start time.Time, cache *cache.Cache) *RunHistor
 	}
 }
 
-// Check evaluates all critical and warning alert rules. An error is returned if
-// the check could not be performed.
-func (s *Schedule) Check(T miniprofiler.Timer, now time.Time) (time.Duration, error) {
-	select {
-	case s.checkRunning <- true:
-		// Good, we've got the lock.
-	default:
-		return 0, fmt.Errorf("check already running")
-	}
-	r := s.NewRunHistory(now, cache.New(0))
-	start := time.Now()
-	for _, a := range s.Conf.Alerts {
-		s.CheckAlert(T, r, a)
-	}
-	d := time.Since(start)
-	s.RunHistory(r)
-	<-s.checkRunning
-	return d, nil
-}
-
 // RunHistory processes an event history and trisggers notifications if needed.
 func (s *Schedule) RunHistory(r *RunHistory) {
 	checkNotify := false
@@ -190,32 +170,48 @@ func (s *Schedule) RunHistory(r *RunHistory) {
 	s.Save()
 }
 
-// CheckUnknown checks for unknown alerts.
-func (s *Schedule) CheckUnknown() {
-	for range time.Tick(s.Conf.CheckFrequency / 4) {
-		log.Println("checkUnknown")
-		r := s.NewRunHistory(time.Now(), nil)
-		s.Lock()
-		for ak, st := range s.status {
-			if st.Forgotten {
-				continue
-			}
-			a := s.Conf.Alerts[ak.Name()]
-			t := a.Unknown
-			if t == 0 {
-				t = s.Conf.CheckFrequency * 2
-			}
-			if t == 0 {
-				continue
-			}
-			if time.Since(st.Touched) < t {
-				continue
-			}
-			r.Events[ak] = &Event{Status: StUnknown}
-		}
-		s.Unlock()
-		s.RunHistory(r)
+// Check evaluates all critical and warning alert rules. An error is returned if
+// the check could not be performed.
+func (s *Schedule) Check(T miniprofiler.Timer, now time.Time) (time.Duration, error) {
+	select {
+	case s.checkRunning <- true:
+		// Good, we've got the lock.
+	default:
+		return 0, fmt.Errorf("check already running")
 	}
+	r := s.NewRunHistory(now, cache.New(0))
+	start := time.Now()
+	for _, ak := range s.findStaleAlerts(now) {
+		r.Events[ak] = &Event{Status: StUnknown}
+	}
+	for _, a := range s.Conf.Alerts {
+		s.CheckAlert(T, r, a)
+	}
+	d := time.Since(start)
+	s.RunHistory(r)
+	<-s.checkRunning
+	return d, nil
+}
+
+func (s *Schedule) findStaleAlerts(now time.Time) []expr.AlertKey {
+	keys := []expr.AlertKey{}
+	s.Lock()
+	for ak, st := range s.status {
+		if st.Forgotten {
+			continue
+		}
+		a := s.Conf.Alerts[ak.Name()]
+		t := a.Unknown
+		if t == 0 {
+			t = s.Conf.CheckFrequency * 2
+		}
+		if now.Sub(st.Touched) < t {
+			continue
+		}
+		keys = append(keys, ak)
+	}
+	s.Unlock()
+	return keys
 }
 
 func (s *Schedule) CheckAlert(T miniprofiler.Timer, r *RunHistory, a *conf.Alert) {
