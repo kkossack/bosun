@@ -72,7 +72,7 @@ func New(expr string, funcs ...map[string]parse.Func) (*Expr, error) {
 
 // Execute applies a parse expression to the specified OpenTSDB context, and
 // returns one result per group. T may be nil to ignore timings.
-func (e *Expr) Execute(c opentsdb.Context, g graphite.Context, logstashElasticHosts []string, cache *cache.Cache, T miniprofiler.Timer, now time.Time, autods int, unjoinedOk bool, search *search.Search, squelched func(tags opentsdb.TagSet) bool) (r *Results, queries []opentsdb.Request, err error) {
+func (e *Expr) Execute(c opentsdb.Context, g graphite.Context, logstashElasticHosts []string, cache *cache.Cache, T miniprofiler.Timer, now time.Time, autods int, unjoinedOk bool, search *search.Search, squelched func(tags opentsdb.TagSet) bool, history AlertStatusProvider) (r *Results, queries []opentsdb.Request, err error) {
 	if squelched == nil {
 		squelched = func(tags opentsdb.TagSet) bool {
 			return false
@@ -89,6 +89,7 @@ func (e *Expr) Execute(c opentsdb.Context, g graphite.Context, logstashElasticHo
 		unjoinedOk:           unjoinedOk,
 		Search:               search,
 		squelched:            squelched,
+		History:              history,
 	}
 	return e.ExecuteState(s, T)
 }

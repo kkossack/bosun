@@ -174,6 +174,22 @@ func (s *Schedule) RunHistory(r *RunHistory) {
 	s.Save()
 }
 
+func (r *RunHistory) GetUnknownAndUnevaluatedAlertKeys(alert string) (unknown, uneval []expr.AlertKey) {
+	unknown = []expr.AlertKey{}
+	uneval = []expr.AlertKey{}
+	for ak, ev := range r.Events {
+		if ak.Name() != alert {
+			continue
+		}
+		if ev.Status == StUnknown {
+			unknown = append(unknown, ak)
+		} else if ev.Unevaluated {
+			uneval = append(uneval, ak)
+		}
+	}
+	return unknown, uneval
+}
+
 // Check evaluates all critical and warning alert rules. An error is returned if
 // the check could not be performed.
 func (s *Schedule) Check(T miniprofiler.Timer, now time.Time) (time.Duration, error) {
@@ -261,7 +277,7 @@ func (s *Schedule) executeExpr(T miniprofiler.Timer, rh *RunHistory, a *conf.Ale
 	if e == nil {
 		return nil, nil
 	}
-	results, _, err := e.Execute(rh.Context, rh.GraphiteContext, s.Conf.LogstashElasticHosts, rh.Cache, T, rh.Start, 0, a.UnjoinedOK, s.Search, s.Conf.AlertSquelched(a))
+	results, _, err := e.Execute(rh.Context, rh.GraphiteContext, s.Conf.LogstashElasticHosts, rh.Cache, T, rh.Start, 0, a.UnjoinedOK, s.Search, s.Conf.AlertSquelched(a), rh)
 	if err != nil {
 		ak := expr.NewAlertKey(a.Name, nil)
 		state := s.Status(ak)
